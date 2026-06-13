@@ -49,22 +49,50 @@ function M.setup()
         -- x > 5.if  →  if x > 5 { | }
         postfix(".if", { t("if "), expr(), t({ " {", "\t" }), i(0), t({ "", "}" }) }),
 
-        -- mySlice.len  →  len(mySlice)|
-        postfix(".len", { t("len("), expr(), t(")"), i(0) }),
-
         -- doSomething().err  →  if doSomething() != nil { return | }
         postfix(".err", { t("if "), expr(), t({ " != nil {", "\treturn " }), i(0), t({ "", "}" }) }),
 
-        -- doSomething().iferr  →  if err := doSomething(); err != nil { return err }|
-        postfix(".iferr", {
-            t("if err := "),
-            expr(),
-            t({ "; err != nil {", "\treturn err", "}" }),
-            i(0),
-        }),
+        -- (var1, var2).dbg → fmt.Printf("var1=%+v; var2=%+v\n", var1, var2)
+        postfix(".dbg", {
+            f(function(_, parent)
+                local match = parent.snippet.env.LS_TSMATCH and parent.snippet.env.LS_TSMATCH[1] or ""
+                local inner = match
 
-        -- myVar.print  →  fmt.Println(myVar)|
-        postfix(".print", { t("fmt.Println("), expr(), t(")"), i(0) }),
+                -- Strip surrounding parens or slice literals if the user used them
+                if match:match("^%((.*)%)$") then
+                    inner = match:match("^%((.*)%)$")
+                elseif match:match("^%[%]any%{(.*)%}$") then
+                    inner = match:match("^%[%]any%{(.*)%}$")
+                elseif match:match("^%[%]interface%{%}%{(.*)%}$") then
+                    inner = match:match("^%[%]interface%{%}%{(.*)%}$")
+                end
+
+                local vars = {}
+                for v in inner:gmatch("[^,]+") do
+                    v = v:match("^%s*(.-)%s*$")
+                    if v ~= "" then
+                        table.insert(vars, v)
+                    end
+                end
+
+                if #vars == 0 then
+                    return 'fmt.Printf("\\n")'
+                end
+
+                local fmt_parts = {}
+                local args_parts = {}
+                for _, v in ipairs(vars) do
+                    local name = v:gsub('"', '\\"')
+                    table.insert(fmt_parts, name .. "=%+v")
+                    table.insert(args_parts, v)
+                end
+
+                local fmt_str = table.concat(fmt_parts, "; ") .. "\\n"
+                local args_str = table.concat(args_parts, ", ")
+
+                return string.format('fmt.Printf("%s", %s)', fmt_str, args_str)
+            end, {}),
+        }),
     })
 end
 
