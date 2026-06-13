@@ -58,20 +58,42 @@ function M.setup()
                 local match = parent.snippet.env.LS_TSMATCH and parent.snippet.env.LS_TSMATCH[1] or ""
                 local inner = match
 
-                -- Strip surrounding parens or slice literals if the user used them
+                -- Strip surrounding parens
                 if match:match("^%((.*)%)$") then
                     inner = match:match("^%((.*)%)$")
-                elseif match:match("^%[%]any%{(.*)%}$") then
-                    inner = match:match("^%[%]any%{(.*)%}$")
-                elseif match:match("^%[%]interface%{%}%{(.*)%}$") then
-                    inner = match:match("^%[%]interface%{%}%{(.*)%}$")
                 end
 
+                -- Use Neovim's built-in Tree-sitter to parse the variables flawlessly
                 local vars = {}
-                for v in inner:gmatch("[^,]+") do
-                    v = v:match("^%s*(.-)%s*$")
-                    if v ~= "" then
-                        table.insert(vars, v)
+                local dummy_code = "var _ = []any{" .. inner .. "}"
+                local ok, parser = pcall(vim.treesitter.get_string_parser, dummy_code, "go")
+
+                if ok and parser then
+                    local tree = parser:parse()[1]
+                    if tree then
+                        local root = tree:root()
+                        -- Find all named nodes immediately inside the literal_value
+                        local query_str = "(literal_value (_) @var)"
+                        local ok_q, query = pcall(vim.treesitter.query.parse, "go", query_str)
+                        if not ok_q then
+                            ok_q, query = pcall(vim.treesitter.query.parse_query, "go", query_str)
+                        end
+                        if ok_q and query then
+                            for _, node in query:iter_captures(root, dummy_code, 0, -1) do
+                                local var_text = vim.treesitter.get_node_text(node, dummy_code)
+                                table.insert(vars, var_text)
+                            end
+                        end
+                    end
+                end
+
+                -- Fallback to regex if tree-sitter couldn't load or parse it
+                if #vars == 0 and inner:match("%S") then
+                    for v in inner:gmatch("[^,]+") do
+                        v = v:match("^%s*(.-)%s*$")
+                        if v ~= "" then
+                            table.insert(vars, v)
+                        end
                     end
                 end
 
@@ -82,7 +104,10 @@ function M.setup()
                 local fmt_parts = {}
                 local args_parts = {}
                 for _, v in ipairs(vars) do
+                    -- Sanitize quotes so they don't break the fmt string
                     local name = v:gsub('"', '\\"')
+                    -- Remove newlines for a cleaner print template
+                    name = name:gsub("\n", " ")
                     table.insert(fmt_parts, name .. "=%+v")
                     table.insert(args_parts, v)
                 end
